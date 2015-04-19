@@ -5,21 +5,15 @@ use std::io::{self, Read, Write};
 use std::net::{SocketAddr, ToSocketAddrs, TcpStream, TcpListener};
 use std::mem;
 use std::path::Path;
-use std::raw::{self, TraitObject};
 use std::sync::Arc;
 
-use openssl::ssl::{Ssl, SslStream, SslContext};
-use openssl::ssl::SslVerifyMode::SslVerifyNone;
+use openssl::ssl::{Ssl, SslStream, SslContext, SSL_VERIFY_NONE};
 use openssl::ssl::SslMethod::Sslv23;
 use openssl::ssl::error::{SslError, StreamError, OpenSslErrors, SslSessionClosed};
 use openssl::x509::X509FileType;
 
-macro_rules! try_some {
-    ($expr:expr) => (match $expr {
-        Some(val) => { return Err(val); },
-        _ => {}
-    })
-}
+use typeable::Typeable;
+use {traitobject};
 
 /// The write-status indicating headers have not been written.
 pub enum Fresh {}
@@ -38,7 +32,7 @@ pub trait NetworkListener: Clone {
     fn accept(&mut self) -> io::Result<Self::Stream>;
 
     /// Get the address this Listener ended up listening on.
-    fn socket_addr(&mut self) -> io::Result<SocketAddr>;
+    fn local_addr(&mut self) -> io::Result<SocketAddr>;
 
     /// Closes the Acceptor, so no more incoming connections will be handled.
 //    fn close(&mut self) -> io::Result<()>;
@@ -61,7 +55,7 @@ impl<'a, N: NetworkListener + 'a> Iterator for NetworkConnections<'a, N> {
 
 
 /// An abstraction over streams that a Server can utilize.
-pub trait NetworkStream: Read + Write + Any + StreamClone + Send {
+pub trait NetworkStream: Read + Write + Any + StreamClone + Send + Typeable {
     /// Get the remote address of the underlying connection.
     fn peer_addr(&mut self) -> io::Result<SocketAddr>;
 }
@@ -81,9 +75,15 @@ impl<T: NetworkStream + Send + Clone> StreamClone for T {
 /// A connector creates a NetworkStream.
 pub trait NetworkConnector {
     /// Type of Stream to create
-    type Stream: NetworkStream + Send;
+    type Stream: Into<Box<NetworkStream + Send>>;
     /// Connect to a remote address.
     fn connect(&mut self, host: &str, port: u16, scheme: &str) -> io::Result<Self::Stream>;
+}
+
+impl<T: NetworkStream + Send> From<T> for Box<NetworkStream + Send> {
+    fn from(s: T) -> Box<NetworkStream + Send> {
+        Box::new(s)
+    }
 }
 
 impl fmt::Debug for Box<NetworkStream + Send> {
@@ -97,33 +97,31 @@ impl Clone for Box<NetworkStream + Send> {
     fn clone(&self) -> Box<NetworkStream + Send> { self.clone_box() }
 }
 
-impl NetworkStream {
+impl NetworkStream + Send {
     unsafe fn downcast_ref_unchecked<T: 'static>(&self) -> &T {
-        mem::transmute(mem::transmute::<&NetworkStream,
-                                        raw::TraitObject>(self).data)
+        mem::transmute(traitobject::data(self))
     }
 
     unsafe fn downcast_mut_unchecked<T: 'static>(&mut self) -> &mut T {
-        mem::transmute(mem::transmute::<&mut NetworkStream,
-                                        raw::TraitObject>(self).data)
+        mem::transmute(traitobject::data_mut(self))
     }
 
-    unsafe fn downcast_unchecked<T: 'static>(self: Box<NetworkStream>) -> Box<T>  {
-        mem::transmute(mem::transmute::<Box<NetworkStream>,
-                                        raw::TraitObject>(self).data)
+    unsafe fn downcast_unchecked<T: 'static>(self: Box<NetworkStream + Send>) -> Box<T>  {
+        let raw: *mut NetworkStream = mem::transmute(self);
+        mem::transmute(traitobject::data_mut(raw))
     }
 }
 
-impl NetworkStream {
+impl NetworkStream + Send {
     /// Is the underlying type in this trait object a T?
     #[inline]
-    pub fn is<T: 'static>(&self) -> bool {
-        self.get_type_id() == TypeId::of::<T>()
+    pub fn is<T: Any>(&self) -> bool {
+        (*self).get_type() == TypeId::of::<T>()
     }
 
     /// If the underlying type is T, get a reference to the contained data.
     #[inline]
-    pub fn downcast_ref<T: 'static>(&self) -> Option<&T> {
+    pub fn downcast_ref<T: Any>(&self) -> Option<&T> {
         if self.is::<T>() {
             Some(unsafe { self.downcast_ref_unchecked() })
         } else {
@@ -134,7 +132,7 @@ impl NetworkStream {
     /// If the underlying type is T, get a mutable reference to the contained
     /// data.
     #[inline]
-    pub fn downcast_mut<T: 'static>(&mut self) -> Option<&mut T> {
+    pub fn downcast_mut<T: Any>(&mut self) -> Option<&mut T> {
         if self.is::<T>() {
             Some(unsafe { self.downcast_mut_unchecked() })
         } else {
@@ -143,8 +141,8 @@ impl NetworkStream {
     }
 
     /// If the underlying type is T, extract it.
-    pub fn downcast<T: 'static>(self: Box<NetworkStream>)
-            -> Result<Box<T>, Box<NetworkStream>> {
+    pub fn downcast<T: Any>(self: Box<NetworkStream + Send>)
+            -> Result<Box<T>, Box<NetworkStream + Send>> {
         if self.is::<T>() {
             Ok(unsafe { self.downcast_unchecked() })
         } else {
@@ -173,19 +171,17 @@ impl Clone for HttpListener {
 impl HttpListener {
 
     /// Start listening to an address over HTTP.
-    pub fn http<To: ToSocketAddrs>(addr: &To) -> io::Result<HttpListener> {
+    pub fn http<To: ToSocketAddrs>(addr: To) -> io::Result<HttpListener> {
         Ok(HttpListener::Http(try!(TcpListener::bind(addr))))
     }
 
     /// Start listening to an address over HTTPS.
-    pub fn https<To: ToSocketAddrs>(addr: &To, cert: &Path, key: &Path) -> io::Result<HttpListener> {
+    pub fn https<To: ToSocketAddrs>(addr: To, cert: &Path, key: &Path) -> io::Result<HttpListener> {
         let mut ssl_context = try!(SslContext::new(Sslv23).map_err(lift_ssl_error));
-        try_some!(ssl_context.set_cipher_list("DEFAULT").map(lift_ssl_error));
-        try_some!(ssl_context.set_certificate_file(
-                cert, X509FileType::PEM).map(lift_ssl_error));
-        try_some!(ssl_context.set_private_key_file(
-                key, X509FileType::PEM).map(lift_ssl_error));
-        ssl_context.set_verify(SslVerifyNone, None);
+        try!(ssl_context.set_cipher_list("DEFAULT").map_err(lift_ssl_error));
+        try!(ssl_context.set_certificate_file(cert, X509FileType::PEM).map_err(lift_ssl_error));
+        try!(ssl_context.set_private_key_file(key, X509FileType::PEM).map_err(lift_ssl_error));
+        ssl_context.set_verify(SSL_VERIFY_NONE, None);
         Ok(HttpListener::Https(try!(TcpListener::bind(addr)), Arc::new(ssl_context)))
     }
 }
@@ -201,10 +197,9 @@ impl NetworkListener for HttpListener {
                 let stream = CloneTcpStream(try!(tcp.accept()).0);
                 match SslStream::new_server(&**ssl_context, stream) {
                     Ok(ssl_stream) => HttpStream::Https(ssl_stream),
-                    Err(StreamError(ref e)) => {
+                    Err(StreamError(e)) => {
                         return Err(io::Error::new(io::ErrorKind::ConnectionAborted,
-                                                "SSL Handshake Interrupted",
-                                                Some(e.to_string())));
+                                                  e));
                     },
                     Err(e) => return Err(lift_ssl_error(e))
                 }
@@ -213,10 +208,10 @@ impl NetworkListener for HttpListener {
     }
 
     #[inline]
-    fn socket_addr(&mut self) -> io::Result<SocketAddr> {
+    fn local_addr(&mut self) -> io::Result<SocketAddr> {
         match *self {
-            HttpListener::Http(ref mut tcp) => tcp.socket_addr(),
-            HttpListener::Https(ref mut tcp, _) => tcp.socket_addr(),
+            HttpListener::Http(ref mut tcp) => tcp.local_addr(),
+            HttpListener::Https(ref mut tcp, _) => tcp.local_addr(),
         }
     }
 }
@@ -258,6 +253,15 @@ pub enum HttpStream {
     Https(SslStream<CloneTcpStream>),
 }
 
+impl fmt::Debug for HttpStream {
+  fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    match *self {
+      HttpStream::Http(_) => write!(fmt, "Http HttpStream"),
+      HttpStream::Https(_) => write!(fmt, "Https HttpStream"),
+    }
+  }
+}
+
 impl Read for HttpStream {
     #[inline]
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
@@ -295,13 +299,12 @@ impl NetworkStream for HttpStream {
 }
 
 /// A connector that will produce HttpStreams.
-#[allow(missing_copy_implementations)]
-pub struct HttpConnector<'v>(pub Option<ContextVerifier<'v>>);
+pub struct HttpConnector(pub Option<ContextVerifier>);
 
 /// A method that can set verification methods on an SSL context
-pub type ContextVerifier<'v> = Box<FnMut(&mut SslContext) -> ()+'v>;
+pub type ContextVerifier = Box<FnMut(&mut SslContext) -> () + Send>;
 
-impl<'v> NetworkConnector for HttpConnector<'v> {
+impl NetworkConnector for HttpConnector {
     type Stream = HttpStream;
 
     fn connect(&mut self, host: &str, port: u16, scheme: &str) -> io::Result<HttpStream> {
@@ -325,8 +328,7 @@ impl<'v> NetworkConnector for HttpConnector<'v> {
             },
             _ => {
                 Err(io::Error::new(io::ErrorKind::InvalidInput,
-                                "Invalid scheme for Http",
-                                None))
+                                "Invalid scheme for Http"))
             }
         }
     }
@@ -337,13 +339,8 @@ fn lift_ssl_error(ssl: SslError) -> io::Error {
     match ssl {
         StreamError(err) => err,
         SslSessionClosed => io::Error::new(io::ErrorKind::ConnectionAborted,
-                                         "SSL Connection Closed",
-                                         None),
-        // Unfortunately throw this away. No way to support this
-        // detail without a better Error abstraction.
-        OpenSslErrors(errs) => io::Error::new(io::ErrorKind::Other,
-                                         "Error in OpenSSL",
-                                         Some(format!("{:?}", errs)))
+                                         "SSL Connection Closed"),
+        e@OpenSslErrors(..) => io::Error::new(io::ErrorKind::Other, e)
     }
 }
 
@@ -354,19 +351,21 @@ mod tests {
 
     #[test]
     fn test_downcast_box_stream() {
-        let stream = box MockStream::new() as Box<NetworkStream + Send>;
+        // FIXME: Use Type ascription
+        let stream: Box<NetworkStream + Send> = Box::new(MockStream::new());
 
         let mock = stream.downcast::<MockStream>().ok().unwrap();
-        assert_eq!(mock, box MockStream::new());
+        assert_eq!(mock, Box::new(MockStream::new()));
 
     }
 
     #[test]
     fn test_downcast_unchecked_box_stream() {
-        let stream = box MockStream::new() as Box<NetworkStream + Send>;
+        // FIXME: Use Type ascription
+        let stream: Box<NetworkStream + Send> = Box::new(MockStream::new());
 
         let mock = unsafe { stream.downcast_unchecked::<MockStream>() };
-        assert_eq!(mock, box MockStream::new());
+        assert_eq!(mock, Box::new(MockStream::new()));
 
     }
 

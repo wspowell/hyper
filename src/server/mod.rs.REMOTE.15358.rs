@@ -24,8 +24,6 @@ use status::StatusCode;
 use uri::RequestUri;
 use version::HttpVersion::{Http10, Http11};
 
-use std::sync::{Arc, RwLock};
-
 use self::listener::ListenerPool;
 
 pub mod request;
@@ -37,16 +35,11 @@ mod listener;
 ///
 /// Once listening, it will create a `Request`/`Response` pair for each
 /// incoming connection, and hand them to the provided handler.
-<<<<<<< HEAD
-pub struct Server<'a, H: Handler<C>, C: ServerState, L = HttpListener> {
-=======
 #[derive(Debug)]
 pub struct Server<'a, H: Handler, L = HttpListener> {
->>>>>>> upstream/master
     handler: H,
     ssl: Option<(&'a Path, &'a Path)>,
-    _marker: PhantomData<L>,
-	state: Arc<RwLock<C>>
+    _marker: PhantomData<L>
 }
 
 macro_rules! try_option(
@@ -58,37 +51,33 @@ macro_rules! try_option(
     }}
 );
 
-impl<'a, H: Handler<C>, C: ServerState, L: NetworkListener> Server<'a, H, C, L> {
+impl<'a, H: Handler, L: NetworkListener> Server<'a, H, L> {
     /// Creates a new server with the provided handler.
-    pub fn new(handler: H, mut state: C) -> Server<'a, H, C, L> {
-		state.reset();
+    pub fn new(handler: H) -> Server<'a, H, L> {
         Server {
             handler: handler,
             ssl: None,
-            _marker: PhantomData,
-			state: Arc::new(RwLock::new(state))
+            _marker: PhantomData
         }
     }
 }
 
-impl<'a, H: Handler<C> + 'static, C: ServerState> Server<'a, H, C, HttpListener> {
+impl<'a, H: Handler + 'static> Server<'a, H, HttpListener> {
     /// Creates a new server that will handle `HttpStream`s.
-    pub fn http(handler: H, state: C) -> Server<'a, H, C, HttpListener> {
-        Server::new(handler, state)
+    pub fn http(handler: H) -> Server<'a, H, HttpListener> {
+        Server::new(handler)
     }
     /// Creates a new server that will handler `HttpStreams`s using a TLS connection.
-    pub fn https(handler: H, mut state: C, cert: &'a Path, key: &'a Path) -> Server<'a, H, C, HttpListener> {
-		state.reset();
+    pub fn https(handler: H, cert: &'a Path, key: &'a Path) -> Server<'a, H, HttpListener> {
         Server {
             handler: handler,
             ssl: Some((cert, key)),
-            _marker: PhantomData,
-			state: Arc::new(RwLock::new(state))
+            _marker: PhantomData
         }
     }
 }
 
-impl<'a, H: Handler<C> + 'static, C: ServerState + 'static> Server<'a, H, C, HttpListener> {
+impl<'a, H: Handler + 'static> Server<'a, H, HttpListener> {
     /// Binds to a socket, and starts handling connections using a task pool.
     pub fn listen_threads<T: ToSocketAddrs>(self, addr: T, threads: usize) -> HttpResult<Listening> {
         let listener = try!(match self.ssl {
@@ -105,26 +94,19 @@ impl<'a, H: Handler<C> + 'static, C: ServerState + 'static> Server<'a, H, C, Htt
 }
 impl<
 'a,
-H: Handler<C> + 'static,
-C: ServerState + 'static,
+H: Handler + 'static,
 L: NetworkListener<Stream=S> + Send + 'static,
-S: NetworkStream + Clone + Send> Server<'a, H, C, L> {
+S: NetworkStream + Clone + Send> Server<'a, H, L> {
     /// Creates a new server that will handle `HttpStream`s.
     pub fn with_listener(self, mut listener: L, threads: usize) -> HttpResult<Listening> {
         let socket = try!(listener.local_addr());
         let handler = self.handler;
-		let state = self.state;
 
         debug!("threads = {:?}", threads);
         let pool = ListenerPool::new(listener.clone());
-<<<<<<< HEAD
-        let work = move |stream| keep_alive_loop(stream, &handler, &state);
-        let guard = thread::scoped(move || pool.accept(work, threads));
-=======
         let work = move |mut stream| handle_connection(&mut stream, &handler);
 
         let guard = thread::spawn(move || pool.accept(work, threads));
->>>>>>> upstream/master
 
         Ok(Listening {
             _guard: Some(guard),
@@ -133,14 +115,9 @@ S: NetworkStream + Clone + Send> Server<'a, H, C, L> {
     }
 }
 
-<<<<<<< HEAD
-fn keep_alive_loop<'h, S, C, H>(mut stream: S, handler: &'h H, state: &Arc<RwLock<C>>)
-where S: NetworkStream + Clone, H: Handler<C>, C: ServerState {
-=======
 
 fn handle_connection<'h, S, H>(mut stream: &mut S, handler: &'h H)
 where S: NetworkStream + Clone, H: Handler {
->>>>>>> upstream/master
     debug!("Incoming stream");
     let addr = match stream.peer_addr() {
         Ok(addr) => addr,
@@ -157,32 +134,6 @@ where S: NetworkStream + Clone, H: Handler {
 
     let mut keep_alive = true;
     while keep_alive {
-<<<<<<< HEAD
-		let local_state = state.clone();
-        keep_alive = handle_connection(addr, &mut rdr, &mut wrt, handler, local_state);
-        debug!("keep_alive = {:?}", keep_alive);
-    }
-}
-
-fn handle_connection<'a, 'aa, 'h, S, H, C>(
-    addr: SocketAddr,
-    rdr: &'a mut BufReader<&'aa mut NetworkStream>,
-    wrt: &mut BufWriter<S>,
-    handler: &'h H,
-	local_state: Arc<RwLock<C>>
-) -> bool where 'aa: 'a, S: NetworkStream, H: Handler<C>, C: ServerState {
-    let mut res = Response::new(wrt);
-    let req = match Request::<'a, 'aa>::new(rdr, addr) {
-        Ok(req) => req,
-        Err(e@HttpIoError(_)) => {
-            debug!("ioerror in keepalive loop = {:?}", e);
-            return false;
-        }
-        Err(e) => {
-            //TODO: send a 400 response
-            error!("request error = {:?}", e);
-            return false;
-=======
         let req = match Request::new(&mut rdr, addr) {
             Ok(req) => req,
             Err(HttpIoError(ref e)) if e.kind() == ErrorKind::ConnectionAborted => {
@@ -214,19 +165,8 @@ fn handle_connection<'a, 'aa, 'h, S, H, C>(
                 debug!("non-100 status ({}) for Expect 100 request", status);
                 break;
             }
->>>>>>> upstream/master
         }
 
-<<<<<<< HEAD
-    let keep_alive = match (req.version, req.headers.get::<Connection>()) {
-        (Http10, Some(conn)) if !conn.contains(&KeepAlive) => false,
-        (Http11, Some(conn)) if conn.contains(&Close)  => false,
-        _ => true
-    };
-    res.version = req.version;
-    handler.handle(req, res, local_state);
-    keep_alive
-=======
         keep_alive = match (req.version, req.headers.get::<Connection>()) {
             (Http10, Some(conn)) if !conn.contains(&KeepAlive) => false,
             (Http11, Some(conn)) if conn.contains(&Close)  => false,
@@ -237,7 +177,6 @@ fn handle_connection<'a, 'aa, 'h, S, H, C>(
         handler.handle(req, res);
         debug!("keep_alive = {:?}", keep_alive);
     }
->>>>>>> upstream/master
 }
 
 /// A listening server, which can later be closed.
@@ -269,39 +208,11 @@ impl Listening {
     }
 }
 
-/// A server state that is passed to the handling function.
-/// The server state holds server information that is use for every request.
-///
-/// Meant to be used as a server cache that is only sometimes updated and can be used 
-/// to store data such as server configuration, basic static sql query results, etc.
-pub trait ServerState: Sync + Send {
-	/// Reset the server state to a default state.
-	/// Called on server start up and if a server state write operation becomes poisoned.
-	fn reset(&mut self);
-}
-
 /// A handler that can handle incoming requests for a server.
-pub trait Handler<C: ServerState>: Sync + Send {
+pub trait Handler: Sync + Send {
     /// Receives a `Request`/`Response` pair, and should perform some action on them.
     ///
     /// This could reading from the request, and writing to the response.
-<<<<<<< HEAD
-    fn handle<'a, 'aa, 'b, 's>(&'s self, Request<'aa, 'a>, Response<'b, Fresh>, Arc<RwLock<C>>);
-}
-
-impl<C: ServerState, F> Handler<C> for F where F: Fn(Request, Response<Fresh>, Arc<RwLock<C>>), F: Sync + Send {
-    fn handle<'a, 'aa, 'b, 's>(&'s self, req: Request<'a, 'aa>, res: Response<'b, Fresh>, state: Arc<RwLock<C>>) {
-        self(req, res, state)
-    }
-}
-
-
-
-
-
-
-
-=======
     fn handle<'a, 'k>(&'a self, Request<'a, 'k>, Response<'a, Fresh>);
 
     /// Called when a Request includes a `Expect: 100-continue` header.
@@ -377,4 +288,3 @@ mod tests {
         assert_eq!(mock.write, &b"HTTP/1.1 417 Expectation Failed\r\n\r\n"[..]);
     }
 }
->>>>>>> upstream/master

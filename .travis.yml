@@ -1,18 +1,23 @@
 language: rust
+sudo: false
+
+cache:
+    directories:
+        - target
 
 script:
-    - cargo build
-    - cargo test
-    - cargo bench --no-run
+    - cargo build --features nightly
+    - cargo test --features nightly
+    - cargo bench --features nightly
 
 after_success: |
     [ $TRAVIS_BRANCH = master ] &&
     [ $TRAVIS_PULL_REQUEST = false ] &&
-    cargo doc &&
+    cargo doc --features nightly &&
     echo '<meta http-equiv=refresh content=0;url=hyper/index.html>' > target/doc/index.html &&
     git shortlog -s -n | cut -c 8- > target/doc/humans.txt &&
-    sudo pip install ghp-import &&
-    ghp-import -n target/doc &&
+    pip install --user ghp-import &&
+    /home/travis/.local/bin/ghp-import -n target/doc &&
     git push -fq https://${TOKEN}@github.com/${TRAVIS_REPO_SLUG}.git gh-pages
 
 env:

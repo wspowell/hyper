@@ -1,6 +1,9 @@
+use std::any::Any;
 use std::any::TypeId;
 use std::fmt;
 use std::str::from_utf8;
+
+use typeable::Typeable;
 
 use super::cell::{OptCell, PtrMapCell};
 use header::{Header, HeaderFormat};
@@ -24,7 +27,7 @@ impl Item {
     #[inline]
     pub fn new_typed(ty: Box<HeaderFormat + Send + Sync>) -> Item {
         let map = PtrMapCell::new();
-        unsafe { map.insert((&*ty).get_type_id(), ty); }
+        unsafe { map.insert((*ty).get_type(), ty); }
         Item {
             raw: OptCell::new(None),
             typed: map,
@@ -51,7 +54,7 @@ impl Item {
         &raw[..]
     }
 
-    pub fn typed<H: Header + HeaderFormat>(&self) -> Option<&H> {
+    pub fn typed<H: Header + HeaderFormat + Any>(&self) -> Option<&H> {
         let tid = TypeId::of::<H>();
         match self.typed.get(tid) {
             Some(val) => Some(val),
@@ -83,7 +86,11 @@ impl Item {
 
 #[inline]
 fn parse<H: Header + HeaderFormat>(raw: &Vec<Vec<u8>>) -> Option<Box<HeaderFormat + Send + Sync>> {
-    Header::parse_header(&raw[..]).map(|h: H| box h as Box<HeaderFormat + Send + Sync>)
+    Header::parse_header(&raw[..]).map(|h: H| {
+        // FIXME: Use Type ascription
+        let h: Box<HeaderFormat + Send + Sync> = Box::new(h);
+        h
+    })
 }
 
 impl fmt::Display for Item {

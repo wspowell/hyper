@@ -1,3 +1,201 @@
+### v0.3.13 (2015-04-17)
+
+
+#### Bug Fixes
+
+* **server:** JoinHandle type parameter ([c694b138](https://github.com/hyperium/hyper/commit/c694b1385bd294e7c8e0398ee75e3a054ced5006))
+
+
+#### Features
+
+* **debug:** add Debug impls for StatusClass, Server, and Listening ([0fb92ee7](https://github.com/hyperium/hyper/commit/0fb92ee735136a07c832124df521b96a6779bd39))
+
+
+### v0.3.12 (2015-04-15)
+
+
+#### Bug Fixes
+
+* **server:**
+  * handle keep-alive closing ([d9187713](https://github.com/hyperium/hyper/commit/d9187713b2eaa628eb34f68c8a7201a6cf8e010d), closes [#437](https://github.com/hyperium/hyper/issues/437))
+  * join on thread when Listening drops ([68d4d63c](https://github.com/hyperium/hyper/commit/68d4d63c2a0289b72ec1442d13e1212a0479c50b), closes [#447](https://github.com/hyperium/hyper/issues/447))
+  * Use thread::spawn instead of thread::scoped. ([e8649567](https://github.com/hyperium/hyper/commit/e864956734af72bab07a3e01c9665bc1b7c96e5e))
+
+
+#### Features
+
+* **http:** Implement Debug for HttpReader/Writer. ([2f606c88](https://github.com/hyperium/hyper/commit/2f606c88bd91e5e36dee4c6db00c3117b1adf067))
+* **log:** clean up logging ([4f09b002](https://github.com/hyperium/hyper/commit/4f09b002ffb2d076fc8fb01d9b9e0464216b2b41))
+* **net:** make HttpStream implement Debug ([7b7f9c25](https://github.com/hyperium/hyper/commit/7b7f9c257d0e2d515bf336c567f12a625471e477))
+
+
+### v0.3.11 (2015-04-15)
+
+
+#### Bug Fixes
+
+* **headers:** Content-Encoding needs a hyphen. ([ca2815ef](https://github.com/hyperium/hyper/commit/ca2815effda2a5b27f781b7bc35105aa81121bae))
+
+
+#### Features
+
+* **client:** remove generic parameter for Connector ([139a51f1](https://github.com/hyperium/hyper/commit/139a51f1c31b80cdddf643e984bbbfbb3d3e8c96), closes [#379](https://github.com/hyperium/hyper/issues/379))
+
+
+#### Breaking Changes
+
+* `AccessControlAllowHeaders` and `AccessControlRequestHeaders` values
+are case insensitive now. `AccessControlAllowOrigin` variants are now `Any` and
+`Value` to match the other headers.
+
+ ([94f38950](https://github.com/hyperium/hyper/commit/94f38950ddf9a97fdc4f44e42aada4ed8f4d9b43))
+* `If-Match`, `If-None-Match` and `Vary` item variant name changed to `Items`
+
+ ([38d297b1](https://github.com/hyperium/hyper/commit/38d297b16e5d14d533947988f770f03b49d47a17))
+* `Etag` header field is now `ETag` header field
+
+ ([4434ea6a](https://github.com/hyperium/hyper/commit/4434ea6a7d57d367c0a541c82f6289ffbda5fb6c))
+* For people using the default HttpConnector and Client,
+    everything should continue to just work. If the Client has been
+    used with a generic parameter, it should be removed.
+
+    However, there were some breaking changes to the internals of
+    NetworkConnectors. Specifically, they no longer return a
+    NetworkStream, but instead a Into<Box<NetworkStream + Send>>. All
+    implementations of NetworkStream should continue to just work,
+    however.
+
+    Possible breakages could come from the stricter usage of Send
+    throughout the Client API.
+
+ ([139a51f1](https://github.com/hyperium/hyper/commit/139a51f1c31b80cdddf643e984bbbfbb3d3e8c96))
+
+
+### v0.3.10 (2015-04-06)
+
+
+#### Bug Fixes
+
+* **README:** Update to compile example against Rust beta ([341f19d3](https://github.com/hyperium/hyper/commit/341f19d3266c6de9a9a90c94f718124792766630))
+
+
+### v0.3.9 (2015-04-03)
+
+
+#### Bug Fixes
+
+* **headers:** Add CowStr as a temporary hack to build on beta. ([8e065563](https://github.com/hyperium/hyper/commit/8e0655637e80c5377c01da4dbca6fb627e6d4225))
+
+
+### v0.3.8 (2015-04-02)
+
+
+#### Bug Fixes
+
+* **rustup:** update to rust beta ([0f5858f3](https://github.com/hyperium/hyper/commit/0f5858f37974731243d47710364776fdd73376fe))
+
+
+#### Breaking Changes
+
+* Removed impl_header!() and impl_list_header!() macros,
+use new header!() macro.
+
+ ([262c450f](https://github.com/hyperium/hyper/commit/262c450f908dbf27754daff0784f0f20145036dd))
+
+
+### v0.3.7 (2015-03-31)
+
+
+#### Bug Fixes
+
+* **buffer:** zero out new capacity when buffer grows ([cfdabd70](https://github.com/hyperium/hyper/commit/cfdabd70ecc3f5290ae1e6f7e5dfd50310d8658d))
+
+
+#### Features
+
+* **entitytag:** Add EntityTag comparison, make EntityTag safe to use ([9c21f7f9](https://github.com/hyperium/hyper/commit/9c21f7f953a5163792e71fb186cab391c45d1bb4))
+
+
+### v0.3.6 (2015-03-30)
+
+
+#### Bug Fixes
+
+* **buffer:** get_buf to not return consumed part of buffer ([04e3b565](https://github.com/hyperium/hyper/commit/04e3b5651561f087fee7c0345fe77d217d3ad35a), closes [#406](https://github.com/hyperium/hyper/issues/406))
+* **rustup:** get rid of slice pattern, add `Reflect` bounds ([c9f2c841](https://github.com/hyperium/hyper/commit/c9f2c841ff0e68dead38e762ed5f8c0f42255bc4))
+
+
+### v0.3.5 (2015-03-28)
+
+
+#### Bug Fixes
+
+* **http:** read more before triggering TooLargeError ([cb59f609](https://github.com/hyperium/hyper/commit/cb59f609c61a097d5d9fa728b9df33d79922573b), closes [#389](https://github.com/hyperium/hyper/issues/389))
+
+
+### v0.3.4 (2015-03-26)
+
+
+#### Bug Fixes
+
+* **rustup:** static bounds required on Type definition, trivial_casts ([eee7a85d](https://github.com/hyperium/hyper/commit/eee7a85d3c3a3f51a1c3c12496c0e45ea312524e))
+
+
+### v0.3.3 (2015-03-25)
+
+
+#### Bug Fixes
+
+* **rustup:**
+  * rustc 1.0.0-nightly (123a754cb 2015-03-24) ([3e456f00](https://github.com/hyperium/hyper/commit/3e456f00f9991b1c723a232fc9c76fe8c0539858))
+  * 1.0.0-nightly (e2fa53e59 2015-03-20) ([f547080d](https://github.com/hyperium/hyper/commit/f547080df53076711b52a016b990c5be56f42ede))
+
+
+#### Features
+
+* **headers:** Implementing content-encoding header ([2983e8de](https://github.com/hyperium/hyper/commit/2983e8dea21f02a31012a25b0a302a128768030a), closes [#391](https://github.com/hyperium/hyper/issues/391))
+
+
+### v0.3.2 (2015-03-20)
+
+
+#### Bug Fixes
+
+* **benches:** removed unused features ([104d4903](https://github.com/hyperium/hyper/commit/104d49036ff40c730ec8bef8012f19ccbee4aaae))
+* **rustup:**
+  * rustc 1.0.0-nightly (ea8b82e90) ([8181de25](https://github.com/hyperium/hyper/commit/8181de253aecfe81123e166a141ebfc8430ec4a4))
+  * adapt to current rustc ([1f0bc951](https://github.com/hyperium/hyper/commit/1f0bc951c9ee40cab622a72d614d4c45d889ccd3), closes [#381](https://github.com/hyperium/hyper/issues/381))
+
+
+#### Features
+
+* **server:** use SocketAddrs instead of Ipv4Addrs ([5d7be77e](https://github.com/hyperium/hyper/commit/5d7be77e4ac0d5c1d852c1208abc77a913c4f4d1))
+
+
+### v0.3.1 (2015-03-18)
+
+
+#### Bug Fixes
+
+* **header:** Fix charset parsing bug. ([5a6e176f](https://github.com/hyperium/hyper/commit/5a6e176f50fe667fbdc4c933c81d2db5ba5c571d))
+* **headers:** Fix overflow with empty cookies ([99baaa10](https://github.com/hyperium/hyper/commit/99baaa10157f6c69ef1795a97e0db8bd794011f6))
+* **rustup:** update to latest rustc ([4fd8a6a9](https://github.com/hyperium/hyper/commit/4fd8a6a9dc0dc969b36f3d3ad51cee177545f883))
+
+
+#### Features
+
+* **server:** add Expect 100-continue support ([0b716943](https://github.com/hyperium/hyper/commit/0b7169432b5f51efe5c167be418c2c50220e46a5), closes [#369](https://github.com/hyperium/hyper/issues/369))
+
+
+#### Breaking Changes
+
+* Several public functions and types in the `http` module
+  have been removed. They have been replaced with 2 methods that handle
+  all of the http1 parsing.
+
+ ([b87bb20f](https://github.com/hyperium/hyper/commit/b87bb20f0c25891c30ef2399da2721596fbc1fcf))
+
+
 ## v0.3.0 (2015-03-03)
 
 

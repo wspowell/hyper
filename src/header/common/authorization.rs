@@ -1,3 +1,4 @@
+use std::any::Any;
 use std::fmt;
 use std::str::{FromStr, from_utf8};
 use std::ops::{Deref, DerefMut};
@@ -22,14 +23,14 @@ impl<S: Scheme> DerefMut for Authorization<S> {
     }
 }
 
-impl<S: Scheme + 'static> Header for Authorization<S> where <S as FromStr>::Err: 'static {
+impl<S: Scheme + Any> Header for Authorization<S> where <S as FromStr>::Err: 'static {
     fn header_name() -> &'static str {
         "Authorization"
     }
 
     fn parse_header(raw: &[Vec<u8>]) -> Option<Authorization<S>> {
         if raw.len() == 1 {
-            match (from_utf8(unsafe { &raw.get_unchecked(0)[..] }), Scheme::scheme(None::<S>)) {
+            match (from_utf8(unsafe { &raw.get_unchecked(0)[..] }), <S as Scheme>::scheme()) {
                 (Ok(header), Some(scheme))
                     if header.starts_with(scheme) && header.len() > scheme.len() + 1 => {
                     header[scheme.len() + 1..].parse::<S>().map(Authorization).ok()
@@ -43,9 +44,9 @@ impl<S: Scheme + 'static> Header for Authorization<S> where <S as FromStr>::Err:
     }
 }
 
-impl<S: Scheme + 'static> HeaderFormat for Authorization<S> where <S as FromStr>::Err: 'static {
+impl<S: Scheme + Any> HeaderFormat for Authorization<S> where <S as FromStr>::Err: 'static {
     fn fmt_header(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        match Scheme::scheme(None::<S>) {
+        match <S as Scheme>::scheme() {
             Some(scheme) => try!(write!(fmt, "{} ", scheme)),
             None => ()
         };
@@ -57,20 +58,19 @@ impl<S: Scheme + 'static> HeaderFormat for Authorization<S> where <S as FromStr>
 pub trait Scheme: FromStr + fmt::Debug + Clone + Send + Sync {
     /// An optional Scheme name.
     ///
-    /// For example, `Basic asdf` has the name `Basic`. The Option<Self> is
-    /// just a marker that can be removed once UFCS is completed.
-    fn scheme(Option<Self>) -> Option<&'static str>;
+    /// Will be replaced with an associated constant once available.
+    fn scheme() -> Option<&'static str>;
     /// Format the Scheme data into a header value.
     fn fmt_scheme(&self, &mut fmt::Formatter) -> fmt::Result;
 }
 
 impl Scheme for String {
-    fn scheme(_: Option<String>) -> Option<&'static str> {
+    fn scheme() -> Option<&'static str> {
         None
     }
 
     fn fmt_scheme(&self, f: &mut fmt::Formatter) -> fmt::Result {
-		write!(f, "{}", self)
+        write!(f, "{}", self)
     }
 }
 
@@ -85,7 +85,7 @@ pub struct Basic {
 }
 
 impl Scheme for Basic {
-    fn scheme(_: Option<Basic>) -> Option<&'static str> {
+    fn scheme() -> Option<&'static str> {
         Some("Basic")
     }
 

@@ -1,10 +1,10 @@
-#![feature(core, collections, io, net, os, path,
-           std_misc, box_syntax, unsafe_destructor)]
+#![doc(html_root_url = "https://hyperium.github.io/hyper/hyper/index.html")]
 #![deny(missing_docs)]
 #![cfg_attr(test, deny(warnings))]
-#![cfg_attr(test, feature(alloc, test))]
+#![cfg_attr(all(test, feature = "nightly"), feature(test))]
 
 //! # Hyper
+//!
 //! Hyper is a fast, modern HTTP implementation written in and for Rust. It
 //! is a low-level typesafe abstraction over raw HTTP, providing an elegant
 //! layer over "stringly-typed" HTTP.
@@ -113,7 +113,7 @@
 //!
 //! Outgoing Requests track their write-status in almost exactly the same way as
 //! outgoing HTTP Responses do on the Server, so we will defer to the explanation
-//! in the documentation for sever Response.
+//! in the documentation for server Response.
 //!
 //! Requests expose an efficient streaming interface instead of a builder pattern,
 //! but they also provide the needed interface for creating a builder pattern over
@@ -126,18 +126,21 @@
 //! implement `Reader` and can be read to get the data out of a `Response`.
 //!
 
-extern crate "rustc-serialize" as serialize;
+extern crate rustc_serialize as serialize;
 extern crate time;
 extern crate url;
 extern crate openssl;
 extern crate cookie;
 extern crate unicase;
 extern crate httparse;
+extern crate num_cpus;
+extern crate traitobject;
+extern crate typeable;
 
 #[macro_use]
 extern crate log;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "nightly"))]
 extern crate test;
 
 
@@ -166,7 +169,8 @@ macro_rules! inspect(
 #[cfg(test)]
 #[macro_use]
 mod mock;
-
+#[doc(hidden)]
+pub mod buffer;
 pub mod client;
 pub mod error;
 pub mod method;
@@ -186,6 +190,7 @@ mod mimewrapper {
 
 #[allow(unconditional_recursion)]
 fn _assert_send<T: Send>() {
+    _assert_send::<Client>();
     _assert_send::<client::Request<net::Fresh>>();
     _assert_send::<client::Response>();
 }

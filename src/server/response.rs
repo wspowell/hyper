@@ -15,6 +15,7 @@ use net::{Fresh, Streaming};
 use version;
 
 /// The outgoing half for a Tcp connection, created by a `Server` and given to a `Handler`.
+#[derive(Debug)]
 pub struct Response<'a, W = Fresh> {
     /// The HTTP version of this response.
     pub version: version::HttpVersion,
@@ -75,7 +76,7 @@ impl<'a> Response<'a, Fresh> {
         try!(write!(&mut self.body, "{} {}{}{}", self.version, self.status, CR as char, LF as char));
 
         if !self.headers.has::<header::Date>() {
-            self.headers.set(header::Date(now_utc()));
+            self.headers.set(header::Date(header::HttpDate(now_utc())));
         }
 
 

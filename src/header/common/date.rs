@@ -1,44 +1,16 @@
-use std::fmt;
-use std::str::FromStr;
-use time::Tm;
-use header::{Header, HeaderFormat};
-use header::parsing::from_one_raw_str;
-use header::parsing::tm_from_str;
+use header::HttpDate;
 
-// Egh, replace as soon as something better than time::Tm exists.
-/// The `Date` header field.
-#[derive(Copy, PartialEq, Clone, Debug)]
-pub struct Date(pub Tm);
-
-deref!(Date => Tm);
-
-impl Header for Date {
-    fn header_name() -> &'static str {
-        "Date"
-    }
-
-    fn parse_header(raw: &[Vec<u8>]) -> Option<Date> {
-        from_one_raw_str(raw)
-    }
-}
-
-
-impl HeaderFormat for Date {
-    fn fmt_header(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        let tm = self.0;
-        let tm = match tm.tm_utcoff {
-            0 => tm,
-            _ => tm.to_utc(),
-        };
-        fmt::Display::fmt(&tm.rfc822(), fmt)
-    }
-}
-
-impl FromStr for Date {
-    type Err = ();
-    fn from_str(s: &str) -> Result<Date, ()> {
-        tm_from_str(s).map(Date).ok_or(())
-    }
+header! {
+    #[doc="`Date` header, defined in [RFC7231](http://tools.ietf.org/html/rfc7231#section-7.1.1.2)"]
+    #[doc=""]
+    #[doc="The `Date` header field represents the date and time at which the"]
+    #[doc="message was originated."]
+    #[doc=""]
+    #[doc="# ABNF"]
+    #[doc="```plain"]
+    #[doc="Date = HTTP-date"]
+    #[doc="```"]
+    (Date, "Date") => [HttpDate]
 }
 
 bench_header!(imf_fixdate, Date, { vec![b"Sun, 07 Nov 1994 08:48:37 GMT".to_vec()] });

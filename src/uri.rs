@@ -53,36 +53,35 @@ impl FromStr for RequestUri {
     type Err = HttpError;
 
     fn from_str(s: &str) -> Result<RequestUri, HttpError> {
-        match s.as_bytes() {
-            [] => Err(HttpError::HttpUriError(UrlError::InvalidCharacter)),
-            [b'*'] => Ok(RequestUri::Star),
-            [b'/', ..] => Ok(RequestUri::AbsolutePath(s.to_string())),
-            bytes if bytes.contains(&b'/') => {
-                Ok(RequestUri::AbsoluteUri(try!(Url::parse(s))))
-            }
-            _ => {
-                let mut temp = "http://".to_string();
-                temp.push_str(s);
-                try!(Url::parse(&temp[..]));
-                todo!("compare vs u.authority()");
-                Ok(RequestUri::Authority(s.to_string()))
-            }
-
+        let bytes = s.as_bytes();
+        if bytes == [] {
+            Err(HttpError::HttpUriError(UrlError::InvalidCharacter))
+        } else if bytes == b"*" {
+            Ok(RequestUri::Star)
+        } else if bytes.starts_with(b"/") {
+            Ok(RequestUri::AbsolutePath(s.to_string()))
+        } else if bytes.contains(&b'/') {
+            Ok(RequestUri::AbsoluteUri(try!(Url::parse(s))))
+        } else {
+            let mut temp = "http://".to_string();
+            temp.push_str(s);
+            try!(Url::parse(&temp[..]));
+            todo!("compare vs u.authority()");
+            Ok(RequestUri::Authority(s.to_string()))
         }
     }
 }
 
 #[test]
 fn test_uri_fromstr() {
-    use error::HttpResult;
-    fn read(s: &str, result: HttpResult<RequestUri>) {
-        assert_eq!(s.parse(), result);
+    fn read(s: &str, result: RequestUri) {
+        assert_eq!(s.parse::<RequestUri>().unwrap(), result);
     }
 
-    read("*", Ok(RequestUri::Star));
-    read("http://hyper.rs/", Ok(RequestUri::AbsoluteUri(Url::parse("http://hyper.rs/").unwrap())));
-    read("hyper.rs", Ok(RequestUri::Authority("hyper.rs".to_string())));
-    read("/", Ok(RequestUri::AbsolutePath("/".to_string())));
+    read("*", RequestUri::Star);
+    read("http://hyper.rs/", RequestUri::AbsoluteUri(Url::parse("http://hyper.rs/").unwrap()));
+    read("hyper.rs", RequestUri::Authority("hyper.rs".to_string()));
+    read("/", RequestUri::AbsolutePath("/".to_string()));
 }
 
 

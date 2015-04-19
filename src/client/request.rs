@@ -51,12 +51,11 @@ impl Request<Fresh> {
     pub fn with_connector<C, S>(method: method::Method, url: Url, connector: &mut C)
         -> HttpResult<Request<Fresh>> where
         C: NetworkConnector<Stream=S>,
-        S: NetworkStream + Send {
-        debug!("{} {}", method, url);
+        S: Into<Box<NetworkStream + Send>> {
         let (host, port) = try!(get_host_and_port(&url));
 
-        let stream = try!(connector.connect(&*host, port, &*url.scheme));
-        let stream = ThroughWriter(BufWriter::new(box stream as Box<NetworkStream + Send>));
+        let stream = try!(connector.connect(&*host, port, &*url.scheme)).into();
+        let stream = ThroughWriter(BufWriter::new(stream));
 
         let mut headers = Headers::new();
         headers.set(Host {
@@ -84,14 +83,14 @@ impl Request<Fresh> {
             uri.push_str(&q[..]);
         }
 
-        debug!("writing head: {:?} {:?} {:?}", self.method, uri, self.version);
+        debug!("request line: {:?} {:?} {:?}", self.method, uri, self.version);
         try!(write!(&mut self.body, "{} {} {}{}",
                     self.method, uri, self.version, LINE_ENDING));
 
 
         let stream = match self.method {
             Method::Get | Method::Head => {
-                debug!("headers [\n{:?}]", self.headers);
+                debug!("headers={:?}", self.headers);
                 try!(write!(&mut self.body, "{}{}", self.headers, LINE_ENDING));
                 EmptyWriter(self.body.into_inner())
             },
@@ -124,7 +123,7 @@ impl Request<Fresh> {
                     }
                 }
 
-                debug!("headers [\n{:?}]", self.headers);
+                debug!("headers={:?}", self.headers);
                 try!(write!(&mut self.body, "{}{}", self.headers, LINE_ENDING));
 
                 if chunked {
@@ -174,7 +173,6 @@ impl Write for Request<Streaming> {
 
 #[cfg(test)]
 mod tests {
-    use std::boxed::BoxAny;
     use std::str::from_utf8;
     use url::Url;
     use method::Method::{Get, Head};

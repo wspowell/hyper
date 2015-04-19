@@ -1,4 +1,5 @@
-#![feature(collections, io, net, test)]
+#![deny(warnings)]
+#![feature(collections, test)]
 extern crate hyper;
 
 extern crate test;

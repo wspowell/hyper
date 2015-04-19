@@ -1,43 +1,18 @@
-use std::fmt;
-use std::str::FromStr;
-use time::Tm;
-use header::{Header, HeaderFormat};
-use header::parsing::from_one_raw_str;
-use header::parsing::tm_from_str;
+use header::HttpDate;
 
-/// The `LastModified` header field.
-#[derive(Copy, PartialEq, Clone, Debug)]
-pub struct LastModified(pub Tm);
-
-deref!(LastModified => Tm);
-
-impl Header for LastModified {
-    fn header_name() -> &'static str {
-        "Last-Modified"
-    }
-
-    fn parse_header(raw: &[Vec<u8>]) -> Option<LastModified> {
-        from_one_raw_str(raw)
-    }
-}
-
-
-impl HeaderFormat for LastModified {
-    fn fmt_header(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        let tm = self.0;
-        let tm = match tm.tm_utcoff {
-            0 => tm,
-            _ => tm.to_utc(),
-        };
-        fmt::Display::fmt(&tm.rfc822(), fmt)
-    }
-}
-
-impl FromStr for LastModified {
-    type Err = ();
-    fn from_str(s: &str) -> Result<LastModified, ()> {
-        tm_from_str(s).map(LastModified).ok_or(())
-    }
+header! {
+    #[doc="`Last-Modified` header, defined in [RFC7232](http://tools.ietf.org/html/rfc7232#section-2.2)"]
+    #[doc=""]
+    #[doc="The `Last-Modified` header field in a response provides a timestamp"]
+    #[doc="indicating the date and time at which the origin server believes the"]
+    #[doc="selected representation was last modified, as determined at the"]
+    #[doc="conclusion of handling the request."]
+    #[doc=""]
+    #[doc="# ABNF"]
+    #[doc="```plain"]
+    #[doc="Expires = HTTP-date"]
+    #[doc="```"]
+    (LastModified, "Last-Modified") => [HttpDate]
 }
 
 bench_header!(imf_fixdate, LastModified, { vec![b"Sun, 07 Nov 1994 08:48:37 GMT".to_vec()] });

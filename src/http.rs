@@ -1,16 +1,19 @@
 //! Pieces pertaining to the HTTP message protocol.
-use std::borrow::{Cow, IntoCow, ToOwned};
+use std::borrow::{Cow, ToOwned};
 use std::cmp::min;
 use std::io::{self, Read, Write, BufRead};
+use std::fmt;
 
 use httparse;
 
+use buffer::BufReader;
 use header::Headers;
 use method::Method;
+use status::StatusCode;
 use uri::RequestUri;
 use version::HttpVersion::{self, Http10, Http11};
-use HttpError:: HttpTooLargeError;
-use HttpResult;
+use HttpError::{HttpIoError, HttpTooLargeError};
+use {HttpError, HttpResult};
 
 use self::HttpReader::{SizedReader, ChunkedReader, EofReader, EmptyReader};
 use self::HttpWriter::{ThroughWriter, ChunkedWriter, SizedWriter, EmptyWriter};
@@ -58,11 +61,23 @@ impl<R: Read> HttpReader<R> {
     }
 }
 
+impl<R> fmt::Debug for HttpReader<R> {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            SizedReader(_,rem) => write!(fmt, "SizedReader(remaining={:?})", rem),
+            ChunkedReader(_, None) => write!(fmt, "ChunkedReader(chunk_remaining=unknown)"),
+            ChunkedReader(_, Some(rem)) => write!(fmt, "ChunkedReader(chunk_remaining={:?})", rem),
+            EofReader(_) => write!(fmt, "EofReader"),
+            EmptyReader(_) => write!(fmt, "EmptyReader"),
+        }
+    }
+}
+
 impl<R: Read> Read for HttpReader<R> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         match *self {
             SizedReader(ref mut body, ref mut remaining) => {
-                debug!("Sized read, remaining={:?}", remaining);
+                trace!("Sized read, remaining={:?}", remaining);
                 if *remaining == 0 {
                     Ok(0)
                 } else {
@@ -81,7 +96,7 @@ impl<R: Read> Read for HttpReader<R> {
                     // None means we don't know the size of the next chunk
                     None => try!(read_chunk_size(body))
                 };
-                debug!("Chunked read, remaining={:?}", rem);
+                trace!("Chunked read, remaining={:?}", rem);
 
                 if rem == 0 {
                     *opt_remaining = Some(0);
@@ -89,7 +104,7 @@ impl<R: Read> Read for HttpReader<R> {
                     // chunk of size 0 signals the end of the chunked stream
                     // if the 0 digit was missing from the stream, it would
                     // be an InvalidInput error instead.
-                    debug!("end of chunked");
+                    trace!("end of chunked");
                     return Ok(0)
                 }
 
@@ -119,8 +134,7 @@ fn eat<R: Read>(rdr: &mut R, bytes: &[u8]) -> io::Result<()> {
         match try!(rdr.read(&mut buf)) {
             1 if buf[0] == b => (),
             _ => return Err(io::Error::new(io::ErrorKind::InvalidInput,
-                                          "Invalid characters found",
-                                           None))
+                                          "Invalid characters found")),
         }
     }
     Ok(())
@@ -134,8 +148,7 @@ fn read_chunk_size<R: Read>(rdr: &mut R) -> io::Result<u64> {
             match try!($rdr.read(&mut buf)) {
                 1 => buf[0],
                 _ => return Err(io::Error::new(io::ErrorKind::InvalidInput,
-                                                  "Invalid chunk size line",
-                                                   None)),
+                                                  "Invalid chunk size line")),
 
             }
         })
@@ -162,8 +175,7 @@ fn read_chunk_size<R: Read>(rdr: &mut R) -> io::Result<u64> {
                 match byte!(rdr) {
                     LF => break,
                     _ => return Err(io::Error::new(io::ErrorKind::InvalidInput,
-                                                  "Invalid chunk size line",
-                                                   None))
+                                                  "Invalid chunk size line"))
 
                 }
             },
@@ -189,12 +201,11 @@ fn read_chunk_size<R: Read>(rdr: &mut R) -> io::Result<u64> {
             // other octet, the chunk size line is invalid!
             _ => {
                 return Err(io::Error::new(io::ErrorKind::InvalidInput,
-                                         "Invalid chunk size line",
-                                         None))
+                                         "Invalid chunk size line"));
             }
         }
     }
-    debug!("chunk size={:?}", size);
+    trace!("chunk size={:?}", size);
     Ok(size)
 }
 
@@ -268,7 +279,7 @@ impl<W: Write> Write for HttpWriter<W> {
             ThroughWriter(ref mut w) => w.write(msg),
             ChunkedWriter(ref mut w) => {
                 let chunk_size = msg.len();
-                debug!("chunked write, size = {:?}", chunk_size);
+                trace!("chunked write, size = {:?}", chunk_size);
                 try!(write!(w, "{:X}{}", chunk_size, LINE_ENDING));
                 try!(w.write_all(msg));
                 try!(w.write_all(LINE_ENDING.as_bytes()));
@@ -307,59 +318,112 @@ impl<W: Write> Write for HttpWriter<W> {
     }
 }
 
+impl<W: Write> fmt::Debug for HttpWriter<W> {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            ThroughWriter(_) => write!(fmt, "ThroughWriter"),
+            ChunkedWriter(_) => write!(fmt, "ChunkedWriter"),
+            SizedWriter(_, rem) => write!(fmt, "SizedWriter(remaining={:?})", rem),
+            EmptyWriter(_) => write!(fmt, "EmptyWriter"),
+        }
+    }
+}
+
+const MAX_HEADERS: usize = 100;
+
 /// Parses a request into an Incoming message head.
-pub fn parse_request<T: BufRead>(buf: &mut T) -> HttpResult<Incoming<(Method, RequestUri)>> {
-    let (inc, len) = {
-        let slice = try!(buf.fill_buf());
-        let mut headers = [httparse::Header { name: "", value: b"" }; 64];
-        let mut req = httparse::Request::new(&mut headers);
-        match try!(req.parse(slice)) {
+#[inline]
+pub fn parse_request<R: Read>(buf: &mut BufReader<R>) -> HttpResult<Incoming<(Method, RequestUri)>> {
+    parse::<R, httparse::Request, (Method, RequestUri)>(buf)
+}
+
+/// Parses a response into an Incoming message head.
+#[inline]
+pub fn parse_response<R: Read>(buf: &mut BufReader<R>) -> HttpResult<Incoming<RawStatus>> {
+    parse::<R, httparse::Response, RawStatus>(buf)
+}
+
+fn parse<R: Read, T: TryParse<Subject=I>, I>(rdr: &mut BufReader<R>) -> HttpResult<Incoming<I>> {
+    loop {
+        match try!(try_parse::<R, T, I>(rdr)) {
+            httparse::Status::Complete((inc, len)) => {
+                rdr.consume(len);
+                return Ok(inc);
+            },
+            _partial => ()
+        }
+        match try!(rdr.read_into_buf()) {
+            0 if rdr.get_buf().len() == 0 => {
+                return Err(HttpIoError(io::Error::new(
+                    io::ErrorKind::ConnectionAborted,
+                    "Connection closed"
+                )))
+            },
+            0 => return Err(HttpTooLargeError),
+            _ => ()
+        }
+    }
+}
+
+fn try_parse<R: Read, T: TryParse<Subject=I>, I>(rdr: &mut BufReader<R>) -> TryParseResult<I> {
+    let mut headers = [httparse::EMPTY_HEADER; MAX_HEADERS];
+    <T as TryParse>::try_parse(&mut headers, rdr.get_buf())
+}
+
+#[doc(hidden)]
+trait TryParse {
+    type Subject;
+    fn try_parse<'a>(headers: &'a mut [httparse::Header<'a>], buf: &'a [u8]) -> TryParseResult<Self::Subject>;
+}
+
+type TryParseResult<T> = Result<httparse::Status<(Incoming<T>, usize)>, HttpError>;
+
+impl<'a> TryParse for httparse::Request<'a> {
+    type Subject = (Method, RequestUri);
+
+    fn try_parse<'b>(headers: &'b mut [httparse::Header<'b>], buf: &'b [u8]) -> TryParseResult<(Method, RequestUri)> {
+        let mut req = httparse::Request::new(headers);
+        Ok(match try!(req.parse(buf)) {
             httparse::Status::Complete(len) => {
-                (Incoming {
+                httparse::Status::Complete((Incoming {
                     version: if req.version.unwrap() == 1 { Http11 } else { Http10 },
                     subject: (
                         try!(req.method.unwrap().parse()),
                         try!(req.path.unwrap().parse())
                     ),
                     headers: try!(Headers::from_raw(req.headers))
-                }, len)
+                }, len))
             },
-            _ => {
-                // request head is bigger than a BufRead's buffer? 400 that!
-                return Err(HttpTooLargeError)
-            }
-        }
-    };
-    buf.consume(len);
-    Ok(inc)
+            httparse::Status::Partial => httparse::Status::Partial
+        })
+    }
 }
 
-/// Parses a response into an Incoming message head.
-pub fn parse_response<T: BufRead>(buf: &mut T) -> HttpResult<Incoming<RawStatus>> {
-    let (inc, len) = {
-        let mut headers = [httparse::Header { name: "", value: b"" }; 64];
-        let mut res = httparse::Response::new(&mut headers);
-        match try!(res.parse(try!(buf.fill_buf()))) {
+impl<'a> TryParse for httparse::Response<'a> {
+    type Subject = RawStatus;
+
+    fn try_parse<'b>(headers: &'b mut [httparse::Header<'b>], buf: &'b [u8]) -> TryParseResult<RawStatus> {
+        let mut res = httparse::Response::new(headers);
+        Ok(match try!(res.parse(buf)) {
             httparse::Status::Complete(len) => {
-                (Incoming {
+                let code = res.code.unwrap();
+                let reason = match StatusCode::from_u16(code).canonical_reason() {
+                    Some(reason) => Cow::Borrowed(reason),
+                    None => Cow::Owned(res.reason.unwrap().to_owned())
+                };
+                httparse::Status::Complete((Incoming {
                     version: if res.version.unwrap() == 1 { Http11 } else { Http10 },
-                    subject: RawStatus(
-                        res.code.unwrap(), res.reason.unwrap().to_owned().into_cow()
-                    ),
+                    subject: RawStatus(code, reason),
                     headers: try!(Headers::from_raw(res.headers))
-                }, len)
+                }, len))
             },
-            _ => {
-                // response head is bigger than a BufRead's buffer?
-                return Err(HttpTooLargeError)
-            }
-        }
-    };
-    buf.consume(len);
-    Ok(inc)
+            httparse::Status::Partial => httparse::Status::Partial
+        })
+    }
 }
 
 /// An Incoming Message head. Includes request/status line, and headers.
+#[derive(Debug)]
 pub struct Incoming<S> {
     /// HTTP version of the message.
     pub version: HttpVersion,
@@ -376,21 +440,17 @@ pub const STAR: u8 = b'*';
 pub const LINE_ENDING: &'static str = "\r\n";
 
 /// The raw status code and reason-phrase.
-#[derive(PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct RawStatus(pub u16, pub Cow<'static, str>);
-
-impl Clone for RawStatus {
-    fn clone(&self) -> RawStatus {
-        RawStatus(self.0, self.1.clone().into_cow())
-    }
-}
 
 #[cfg(test)]
 mod tests {
     use std::io::{self, Write};
 
-    use super::{read_chunk_size};
+    use buffer::BufReader;
+    use mock::MockStream;
 
+    use super::{read_chunk_size, parse_request};
 
     #[test]
     fn test_write_chunked() {
@@ -399,7 +459,7 @@ mod tests {
         w.write_all(b"foo bar").unwrap();
         w.write_all(b"baz quux herp").unwrap();
         let buf = w.end().unwrap();
-        let s = from_utf8(buf.as_slice()).unwrap();
+        let s = from_utf8(buf.as_ref()).unwrap();
         assert_eq!(s, "7\r\nfoo bar\r\nD\r\nbaz quux herp\r\n0\r\n\r\n");
     }
 
@@ -408,31 +468,31 @@ mod tests {
         use std::str::from_utf8;
         let mut w = super::HttpWriter::SizedWriter(Vec::new(), 8);
         w.write_all(b"foo bar").unwrap();
-        assert_eq!(w.write(b"baz"), Ok(1));
+        assert_eq!(w.write(b"baz").unwrap(), 1);
 
         let buf = w.end().unwrap();
-        let s = from_utf8(buf.as_slice()).unwrap();
+        let s = from_utf8(buf.as_ref()).unwrap();
         assert_eq!(s, "foo barb");
     }
 
     #[test]
     fn test_read_chunk_size() {
-        fn read(s: &str, result: io::Result<u64>) {
-            assert_eq!(read_chunk_size(&mut s.as_bytes()), result);
+        fn read(s: &str, result: u64) {
+            assert_eq!(read_chunk_size(&mut s.as_bytes()).unwrap(), result);
         }
 
         fn read_err(s: &str) {
             assert_eq!(read_chunk_size(&mut s.as_bytes()).unwrap_err().kind(), io::ErrorKind::InvalidInput);
         }
 
-        read("1\r\n", Ok(1));
-        read("01\r\n", Ok(1));
-        read("0\r\n", Ok(0));
-        read("00\r\n", Ok(0));
-        read("A\r\n", Ok(10));
-        read("a\r\n", Ok(10));
-        read("Ff\r\n", Ok(255));
-        read("Ff   \r\n", Ok(255));
+        read("1\r\n", 1);
+        read("01\r\n", 1);
+        read("0\r\n", 0);
+        read("00\r\n", 0);
+        read("A\r\n", 10);
+        read("a\r\n", 10);
+        read("Ff\r\n", 255);
+        read("Ff   \r\n", 255);
         // Missing LF or CRLF
         read_err("F\rF");
         read_err("F");
@@ -442,33 +502,51 @@ mod tests {
         read_err("-\r\n");
         read_err("-1\r\n");
         // Acceptable (if not fully valid) extensions do not influence the size
-        read("1;extension\r\n", Ok(1));
-        read("a;ext name=value\r\n", Ok(10));
-        read("1;extension;extension2\r\n", Ok(1));
-        read("1;;;  ;\r\n", Ok(1));
-        read("2; extension...\r\n", Ok(2));
-        read("3   ; extension=123\r\n", Ok(3));
-        read("3   ;\r\n", Ok(3));
-        read("3   ;   \r\n", Ok(3));
+        read("1;extension\r\n", 1);
+        read("a;ext name=value\r\n", 10);
+        read("1;extension;extension2\r\n", 1);
+        read("1;;;  ;\r\n", 1);
+        read("2; extension...\r\n", 2);
+        read("3   ; extension=123\r\n", 3);
+        read("3   ;\r\n", 3);
+        read("3   ;   \r\n", 3);
         // Invalid extensions cause an error
         read_err("1 invalid extension\r\n");
         read_err("1 A\r\n");
         read_err("1;no CRLF");
     }
 
+    #[test]
+    fn test_parse_incoming() {
+        let mut raw = MockStream::with_input(b"GET /echo HTTP/1.1\r\nHost: hyper.rs\r\n\r\n");
+        let mut buf = BufReader::new(&mut raw);
+        parse_request(&mut buf).unwrap();
+    }
+
+    #[test]
+    fn test_parse_tcp_closed() {
+        use std::io::ErrorKind;
+        use error::HttpError::HttpIoError;
+
+        let mut empty = MockStream::new();
+        let mut buf = BufReader::new(&mut empty);
+        match parse_request(&mut buf) {
+            Err(HttpIoError(ref e)) if e.kind() == ErrorKind::ConnectionAborted => (),
+            other => panic!("unexpected result: {:?}", other)
+        }
+    }
+
+    #[cfg(feature = "nightly")]
     use test::Bencher;
 
+    #[cfg(feature = "nightly")]
     #[bench]
     fn bench_parse_incoming(b: &mut Bencher) {
-        use std::io::BufReader;
-        use mock::MockStream;
-        use net::NetworkStream;
-        use super::parse_request;
+        let mut raw = MockStream::with_input(b"GET /echo HTTP/1.1\r\nHost: hyper.rs\r\n\r\n");
+        let mut buf = BufReader::new(&mut raw);
         b.iter(|| {
-            let mut raw = MockStream::with_input(b"GET /echo HTTP/1.1\r\nHost: hyper.rs\r\n\r\n");
-            let mut buf = BufReader::new(&mut raw as &mut NetworkStream);
-            
             parse_request(&mut buf).unwrap();
+            buf.get_mut().read.set_position(0);
         });
     }
 }

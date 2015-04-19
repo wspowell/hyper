@@ -28,7 +28,9 @@ impl Header for Host {
             // https://github.com/servo/rust-url/issues/42
             let idx = {
                 let slice = &s[..];
-                if slice.char_at(1) == '[' {
+                let mut chars = slice.chars();
+                chars.next();
+                if chars.next().unwrap() == '[' {
                     match slice.rfind(']') {
                         Some(idx) => {
                             if slice.len() > idx + 2 {
@@ -79,14 +81,14 @@ mod tests {
 
     #[test]
     fn test_host() {
-        let host = Header::parse_header([b"foo.com".to_vec()].as_slice());
+        let host = Header::parse_header([b"foo.com".to_vec()].as_ref());
         assert_eq!(host, Some(Host {
             hostname: "foo.com".to_string(),
             port: None
         }));
 
 
-        let host = Header::parse_header([b"foo.com:8080".to_vec()].as_slice());
+        let host = Header::parse_header([b"foo.com:8080".to_vec()].as_ref());
         assert_eq!(host, Some(Host {
             hostname: "foo.com".to_string(),
             port: Some(8080)

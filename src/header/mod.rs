@@ -5,23 +5,21 @@
 //! must implement the `Header` trait from this module. Several common headers
 //! are already provided, such as `Host`, `ContentType`, `UserAgent`, and others.
 use std::any::Any;
-use std::borrow::Cow::{Borrowed};
-use std::borrow::ToOwned;
-use std::fmt;
-use std::raw::TraitObject;
+use std::borrow::{Cow, ToOwned};
 use std::collections::HashMap;
 use std::collections::hash_map::{Iter, Entry};
 use std::iter::{FromIterator, IntoIterator};
-use std::borrow::{Cow, IntoCow};
-use std::{mem, raw};
+use std::ops::{Deref, DerefMut};
+use std::{mem, fmt};
 
-use httparse;
+use {httparse, traitobject};
+use typeable::Typeable;
 use unicase::UniCase;
 
 use self::internals::Item;
 use error::HttpResult;
 
-pub use self::shared::{Charset, Encoding, EntityTag, Quality, QualityItem, qitem, q};
+pub use self::shared::{Charset, Encoding, EntityTag, HttpDate, Quality, QualityItem, qitem, q};
 pub use self::common::*;
 
 mod common;
@@ -29,7 +27,7 @@ mod internals;
 mod shared;
 pub mod parsing;
 
-type HeaderName = UniCase<Cow<'static, str>>;
+type HeaderName = UniCase<CowStr>;
 
 /// A trait for any object that will represent a header field and value.
 ///
@@ -54,7 +52,7 @@ pub trait Header: Clone + Any + Send + Sync {
 /// A trait for any object that will represent a header field and value.
 ///
 /// This trait represents the formatting of a Header for output to a TcpStream.
-pub trait HeaderFormat: fmt::Debug + HeaderClone + Any + Send + Sync {
+pub trait HeaderFormat: fmt::Debug + HeaderClone + Any + Typeable + Send + Sync {
     /// Format a header to be output into a TcpStream.
     ///
     /// This method is not allowed to introduce an Err not produced
@@ -65,25 +63,25 @@ pub trait HeaderFormat: fmt::Debug + HeaderClone + Any + Send + Sync {
 
 #[doc(hidden)]
 pub trait HeaderClone {
-    fn clone_box(&self) -> Box<HeaderFormat + Sync + Send>;
+    fn clone_box(&self) -> Box<HeaderFormat + Send + Sync>;
 }
 
-impl<T: HeaderFormat + Send + Sync + Clone> HeaderClone for T {
+impl<T: HeaderFormat + Clone> HeaderClone for T {
     #[inline]
-    fn clone_box(&self) -> Box<HeaderFormat + Sync + Send> {
+    fn clone_box(&self) -> Box<HeaderFormat + Send + Sync> {
         Box::new(self.clone())
     }
 }
 
-impl HeaderFormat {
+impl HeaderFormat + Send + Sync {
     #[inline]
     unsafe fn downcast_ref_unchecked<T: 'static>(&self) -> &T {
-        mem::transmute(mem::transmute::<&HeaderFormat, raw::TraitObject>(self).data)
+        mem::transmute(traitobject::data(self))
     }
 
     #[inline]
     unsafe fn downcast_mut_unchecked<T: 'static>(&mut self) -> &mut T {
-        mem::transmute(mem::transmute::<&mut HeaderFormat, raw::TraitObject>(self).data)
+        mem::transmute(traitobject::data_mut(self))
     }
 }
 
@@ -119,8 +117,8 @@ impl Headers {
     pub fn from_raw<'a>(raw: &[httparse::Header<'a>]) -> HttpResult<Headers> {
         let mut headers = Headers::new();
         for header in raw {
-            debug!("raw header: {:?}={:?}", header.name, &header.value[..]);
-            let name = UniCase(header.name.to_owned().into_cow());
+            trace!("raw header: {:?}={:?}", header.name, &header.value[..]);
+            let name = UniCase(CowStr(Cow::Owned(header.name.to_owned())));
             let mut item = match headers.data.entry(name) {
                 Entry::Vacant(entry) => entry.insert(Item::new_raw(vec![])),
                 Entry::Occupied(entry) => entry.into_mut()
@@ -136,7 +134,7 @@ impl Headers {
     ///
     /// The field is determined by the type of the value being set.
     pub fn set<H: Header + HeaderFormat>(&mut self, value: H) {
-        self.data.insert(UniCase(Borrowed(header_name::<H>())),
+        self.data.insert(UniCase(CowStr(Cow::Borrowed(header_name::<H>()))),
                          Item::new_typed(Box::new(value)));
     }
 
@@ -153,7 +151,7 @@ impl Headers {
     /// ```
     pub fn get_raw(&self, name: &str) -> Option<&[Vec<u8>]> {
         self.data
-            .get(&UniCase(Borrowed(unsafe { mem::transmute::<&str, &str>(name) })))
+            .get(&UniCase(CowStr(Cow::Borrowed(unsafe { mem::transmute::<&str, &str>(name) }))))
             .map(Item::raw)
     }
 
@@ -166,23 +164,25 @@ impl Headers {
     /// # let mut headers = Headers::new();
     /// headers.set_raw("content-length", vec![b"5".to_vec()]);
     /// ```
-    pub fn set_raw<K: IntoCow<'static, str>>(&mut self, name: K, value: Vec<Vec<u8>>) {
-        self.data.insert(UniCase(name.into_cow()), Item::new_raw(value));
+    pub fn set_raw<K: Into<Cow<'static, str>>>(&mut self, name: K, value: Vec<Vec<u8>>) {
+        self.data.insert(UniCase(CowStr(name.into())), Item::new_raw(value));
     }
 
     /// Remove a header set by set_raw
     pub fn remove_raw(&mut self, name: &str) {
-        self.data.remove(&UniCase(name.into_cow()));
+        self.data.remove(
+            &UniCase(CowStr(Cow::Borrowed(unsafe { mem::transmute::<&str, &str>(name) })))
+        );
     }
 
     /// Get a reference to the header field's value, if it exists.
     pub fn get<H: Header + HeaderFormat>(&self) -> Option<&H> {
-        self.data.get(&UniCase(Borrowed(header_name::<H>()))).and_then(Item::typed::<H>)
+        self.data.get(&UniCase(CowStr(Cow::Borrowed(header_name::<H>())))).and_then(Item::typed::<H>)
     }
 
     /// Get a mutable reference to the header field's value, if it exists.
     pub fn get_mut<H: Header + HeaderFormat>(&mut self) -> Option<&mut H> {
-        self.data.get_mut(&UniCase(Borrowed(header_name::<H>()))).and_then(Item::typed_mut::<H>)
+        self.data.get_mut(&UniCase(CowStr(Cow::Borrowed(header_name::<H>())))).and_then(Item::typed_mut::<H>)
     }
 
     /// Returns a boolean of whether a certain header is in the map.
@@ -196,13 +196,13 @@ impl Headers {
     /// let has_type = headers.has::<ContentType>();
     /// ```
     pub fn has<H: Header + HeaderFormat>(&self) -> bool {
-        self.data.contains_key(&UniCase(Borrowed(header_name::<H>())))
+        self.data.contains_key(&UniCase(CowStr(Cow::Borrowed(header_name::<H>()))))
     }
 
     /// Removes a header from the map, if one existed.
     /// Returns true if a header has been removed.
     pub fn remove<H: Header + HeaderFormat>(&mut self) -> bool {
-        self.data.remove(&UniCase(Borrowed(header_name::<H>()))).is_some()
+        self.data.remove(&UniCase(CowStr(Cow::Borrowed(header_name::<H>())))).is_some()
     }
 
     /// Returns an iterator over the header fields.
@@ -234,11 +234,11 @@ impl fmt::Display for Headers {
 
 impl fmt::Debug for Headers {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        try!(fmt.write_str("Headers {{ "));
+        try!(fmt.write_str("Headers { "));
         for header in self.iter() {
             try!(write!(fmt, "{:?}, ", header));
         }
-        try!(fmt.write_str("}}"));
+        try!(fmt.write_str("}"));
         Ok(())
     }
 }
@@ -266,13 +266,13 @@ impl<'a> HeaderView<'a> {
     /// Check if a HeaderView is a certain Header.
     #[inline]
     pub fn is<H: Header>(&self) -> bool {
-        UniCase(header_name::<H>().into_cow()) == *self.0
+        UniCase(CowStr(Cow::Borrowed(header_name::<H>()))) == *self.0
     }
 
     /// Get the Header name as a slice.
     #[inline]
     pub fn name(&self) -> &'a str {
-        self.0.as_slice()
+        self.0.as_ref()
     }
 
     /// Cast the value to a certain Header type.
@@ -344,6 +344,42 @@ impl<'a, H: HeaderFormat> fmt::Debug for HeaderFormatter<'a, H> {
     }
 }
 
+#[derive(Clone, Hash, Eq, PartialEq, PartialOrd, Ord)]
+struct CowStr(Cow<'static, str>);
+
+impl Deref for CowStr {
+    type Target = Cow<'static, str>;
+
+    fn deref(&self) -> &Cow<'static, str> {
+        &self.0
+    }
+}
+
+impl fmt::Debug for CowStr {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        fmt::Debug::fmt(&self.0, fmt)
+    }
+}
+
+impl fmt::Display for CowStr {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        fmt::Display::fmt(&self.0, fmt)
+    }
+}
+
+impl DerefMut for CowStr {
+    fn deref_mut(&mut self) -> &mut Cow<'static, str> {
+        &mut self.0
+    }
+}
+
+impl AsRef<str> for CowStr {
+    fn as_ref(&self) -> &str {
+        self
+    }
+}
+
+
 #[cfg(test)]
 mod tests {
     use std::fmt;
@@ -354,13 +390,24 @@ mod tests {
                 Accept, Host, qitem};
     use httparse;
 
+    #[cfg(feature = "nightly")]
     use test::Bencher;
+
+    // Slice.position_elem is unstable
+    fn index_of(slice: &[u8], byte: u8) -> Option<usize> {
+        for (index, &b) in slice.iter().enumerate() {
+            if b == byte {
+                return Some(index);
+            }
+        }
+        None
+    }
 
     macro_rules! raw {
         ($($line:expr),*) => ({
             [$({
                 let line = $line;
-                let pos = line.position_elem(&b':').expect("raw splits on :, not found");
+                let pos = index_of(line, b':').expect("raw splits on ':', not found");
                 httparse::Header {
                     name: ::std::str::from_utf8(&line[..pos]).unwrap(),
                     value: &line[pos + 2..]
@@ -377,7 +424,7 @@ mod tests {
 
     #[test]
     fn test_content_type() {
-        let content_type = Header::parse_header([b"text/plain".to_vec()].as_slice());
+        let content_type = Header::parse_header([b"text/plain".to_vec()].as_ref());
         assert_eq!(content_type, Some(ContentType(Mime(Text, Plain, vec![]))));
     }
 
@@ -386,10 +433,10 @@ mod tests {
         let text_plain = qitem(Mime(Text, Plain, vec![]));
         let application_vendor = "application/vnd.github.v3.full+json; q=0.5".parse().unwrap();
 
-        let accept = Header::parse_header([b"text/plain".to_vec()].as_slice());
+        let accept = Header::parse_header([b"text/plain".to_vec()].as_ref());
         assert_eq!(accept, Some(Accept(vec![text_plain.clone()])));
 
-        let accept = Header::parse_header([b"application/vnd.github.v3.full+json; q=0.5, text/plain".to_vec()].as_slice());
+        let accept = Header::parse_header([b"application/vnd.github.v3.full+json; q=0.5, text/plain".to_vec()].as_ref());
         assert_eq!(accept, Some(Accept(vec![application_vendor, text_plain])));
     }
 
@@ -529,6 +576,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "nightly")]
     #[bench]
     fn bench_headers_new(b: &mut Bencher) {
         b.iter(|| {
@@ -538,12 +586,14 @@ mod tests {
         })
     }
 
+    #[cfg(feature = "nightly")]
     #[bench]
     fn bench_headers_from_raw(b: &mut Bencher) {
         let raw = raw!(b"Content-Length: 10");
         b.iter(|| Headers::from_raw(&raw).unwrap())
     }
 
+    #[cfg(feature = "nightly")]
     #[bench]
     fn bench_headers_get(b: &mut Bencher) {
         let mut headers = Headers::new();
@@ -551,18 +601,21 @@ mod tests {
         b.iter(|| assert_eq!(headers.get::<ContentLength>(), Some(&ContentLength(11))))
     }
 
+    #[cfg(feature = "nightly")]
     #[bench]
     fn bench_headers_get_miss(b: &mut Bencher) {
         let headers = Headers::new();
         b.iter(|| assert!(headers.get::<ContentLength>().is_none()))
     }
 
+    #[cfg(feature = "nightly")]
     #[bench]
     fn bench_headers_set(b: &mut Bencher) {
         let mut headers = Headers::new();
         b.iter(|| headers.set(ContentLength(12)))
     }
 
+    #[cfg(feature = "nightly")]
     #[bench]
     fn bench_headers_has(b: &mut Bencher) {
         let mut headers = Headers::new();
@@ -570,6 +623,7 @@ mod tests {
         b.iter(|| assert!(headers.has::<ContentLength>()))
     }
 
+    #[cfg(feature = "nightly")]
     #[bench]
     fn bench_headers_view_is(b: &mut Bencher) {
         let mut headers = Headers::new();
@@ -579,6 +633,7 @@ mod tests {
         b.iter(|| assert!(view.is::<ContentLength>()))
     }
 
+    #[cfg(feature = "nightly")]
     #[bench]
     fn bench_headers_fmt(b: &mut Bencher) {
         let mut headers = Headers::new();

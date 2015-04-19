@@ -1,7 +1,7 @@
 [package]
 
 name = "hyper"
-version = "0.3.0"
+version = "0.3.13"
 description = "A modern HTTP library."
 readme = "README.md"
 documentation = "http://hyperium.github.io/hyper/hyper/index.html"
@@ -16,12 +16,17 @@ cookie = "*"
 httparse = "*"
 log = ">= 0.2.0"
 mime = "*"
+num_cpus = "*"
 openssl = "*"
 rustc-serialize = "*"
 time = "*"
 unicase = "*"
 url = "*"
+traitobject = "*"
+typeable = "*"
 
 [dev-dependencies]
 env_logger = "*"
 
+[features]
+nightly = []

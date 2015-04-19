@@ -1,8 +1,8 @@
 //! Client Responses
-use std::io::{self, Read, BufReader};
-use std::num::FromPrimitive;
+use std::io::{self, Read};
 use std::marker::PhantomData;
 
+use buffer::BufReader;
 use header;
 use header::{ContentLength, TransferEncoding};
 use header::Encoding::Chunked;
@@ -12,9 +12,9 @@ use http::HttpReader::{SizedReader, ChunkedReader, EofReader};
 use status;
 use version;
 use HttpResult;
-use HttpError::HttpStatusError;
 
 /// A response for a client request to a remote server.
+#[derive(Debug)]
 pub struct Response<S = HttpStream> {
     /// The status from the server.
     pub status: status::StatusCode,
@@ -38,10 +38,7 @@ impl Response {
         let raw_status = head.subject;
         let headers = head.headers;
 
-        let status = match FromPrimitive::from_u16(raw_status.0) {
-            Some(status) => status,
-            None => return Err(HttpStatusError)
-        };
+        let status = status::StatusCode::from_u16(raw_status.0);
         debug!("version={:?}, status={:?}", head.version, status);
         debug!("headers={:?}", headers);
 
@@ -49,13 +46,13 @@ impl Response {
             match headers.get::<TransferEncoding>() {
                 Some(&TransferEncoding(ref codings)) => {
                     if codings.len() > 1 {
-                        debug!("TODO: #2 handle other codings: {:?}", codings);
+                        trace!("TODO: #2 handle other codings: {:?}", codings);
                     };
 
                     if codings.contains(&Chunked) {
                         ChunkedReader(stream, None)
                     } else {
-                        debug!("not chuncked. read till eof");
+                        trace!("not chuncked. read till eof");
                         EofReader(stream)
                     }
                 }
@@ -67,7 +64,7 @@ impl Response {
                 None => unreachable!()
             }
         } else {
-            debug!("neither Transfer-Encoding nor Content-Length");
+            trace!("neither Transfer-Encoding nor Content-Length");
             EofReader(stream)
         };
 
@@ -102,17 +99,16 @@ impl Read for Response {
 #[cfg(test)]
 mod tests {
     use std::borrow::Cow::Borrowed;
-    use std::boxed::BoxAny;
-    use std::io::{self, Read, BufReader};
+    use std::io::{self, Read};
     use std::marker::PhantomData;
 
+    use buffer::BufReader;
     use header::Headers;
     use header::TransferEncoding;
     use header::Encoding;
     use http::HttpReader::EofReader;
     use http::RawStatus;
     use mock::MockStream;
-    use net::NetworkStream;
     use status;
     use version;
 
@@ -131,13 +127,13 @@ mod tests {
             status: status::StatusCode::Ok,
             headers: Headers::new(),
             version: version::HttpVersion::Http11,
-            body: EofReader(BufReader::new(box MockStream::new() as Box<NetworkStream + Send>)),
+            body: EofReader(BufReader::new(Box::new(MockStream::new()))),
             status_raw: RawStatus(200, Borrowed("OK")),
             _marker: PhantomData,
         };
 
         let b = res.into_inner().downcast::<MockStream>().ok().unwrap();
-        assert_eq!(b, box MockStream::new());
+        assert_eq!(b, Box::new(MockStream::new()));
 
     }
 
@@ -157,7 +153,7 @@ mod tests {
             \r\n"
         );
 
-        let res = Response::new(box stream).unwrap();
+        let res = Response::new(Box::new(stream)).unwrap();
 
         // The status line is correct?
         assert_eq!(res.status, status::StatusCode::Ok);
@@ -171,7 +167,7 @@ mod tests {
             None => panic!("Transfer-Encoding: chunked expected!"),
         };
         // The body is correct?
-        assert_eq!(read_to_string(res), Ok("qwert".to_string()));
+        assert_eq!(read_to_string(res).unwrap(), "qwert".to_string());
     }
 
     /// Tests that when a chunk size is not a valid radix-16 number, an error
@@ -188,7 +184,7 @@ mod tests {
             \r\n"
         );
 
-        let res = Response::new(box stream).unwrap();
+        let res = Response::new(Box::new(stream)).unwrap();
 
         assert!(read_to_string(res).is_err());
     }
@@ -207,7 +203,7 @@ mod tests {
             \r\n"
         );
 
-        let res = Response::new(box stream).unwrap();
+        let res = Response::new(Box::new(stream)).unwrap();
 
         assert!(read_to_string(res).is_err());
     }
@@ -226,8 +222,8 @@ mod tests {
             \r\n"
         );
 
-        let res = Response::new(box stream).unwrap();
+        let res = Response::new(Box::new(stream)).unwrap();
 
-        assert_eq!(read_to_string(res), Ok("1".to_string()));
+        assert_eq!(read_to_string(res).unwrap(), "1".to_string());
     }
 }

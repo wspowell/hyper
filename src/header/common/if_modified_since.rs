@@ -1,43 +1,20 @@
-use std::fmt;
-use std::str::FromStr;
-use time::Tm;
-use header::{Header, HeaderFormat};
-use header::parsing::from_one_raw_str;
-use header::parsing::tm_from_str;
+use header::HttpDate;
 
-/// The `If-Modified-Since` header field.
-#[derive(Copy, PartialEq, Clone, Debug)]
-pub struct IfModifiedSince(pub Tm);
-
-deref!(IfModifiedSince => Tm);
-
-impl Header for IfModifiedSince {
-    fn header_name() -> &'static str {
-        "If-Modified-Since"
-    }
-
-    fn parse_header(raw: &[Vec<u8>]) -> Option<IfModifiedSince> {
-        from_one_raw_str(raw)
-    }
-}
-
-
-impl HeaderFormat for IfModifiedSince {
-    fn fmt_header(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        let tm = self.0;
-        let tm = match tm.tm_utcoff {
-            0 => tm,
-            _ => tm.to_utc(),
-        };
-        fmt::Display::fmt(&tm.rfc822(), fmt)
-    }
-}
-
-impl FromStr for IfModifiedSince {
-    type Err = ();
-    fn from_str(s: &str) -> Result<IfModifiedSince, ()> {
-        tm_from_str(s).map(IfModifiedSince).ok_or(())
-    }
+header! {
+    #[doc="`If-Modified-Since` header, defined in"]
+    #[doc="[RFC7232](http://tools.ietf.org/html/rfc7232#section-3.3)"]
+    #[doc=""]
+    #[doc="The `If-Modified-Since` header field makes a GET or HEAD request"]
+    #[doc="method conditional on the selected representation's modification date"]
+    #[doc="being more recent than the date provided in the field-value."]
+    #[doc="Transfer of the selected representation's data is avoided if that"]
+    #[doc="data has not changed."]
+    #[doc=""]
+    #[doc="# ABNF"]
+    #[doc="```plain"]
+    #[doc="If-Unmodified-Since = HTTP-date"]
+    #[doc="```"]
+    (IfModifiedSince, "If-Modified-Since") => [HttpDate]
 }
 
 bench_header!(imf_fixdate, IfModifiedSince, { vec![b"Sun, 07 Nov 1994 08:48:37 GMT".to_vec()] });
