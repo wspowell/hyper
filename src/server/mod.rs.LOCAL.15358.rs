@@ -1,10 +1,12 @@
 //! HTTP Server
-use std::io::{BufReader, BufWriter};
+use std::fmt;
+use std::io::{ErrorKind, BufWriter, Write};
 use std::marker::PhantomData;
-use std::net::{IpAddr, SocketAddr};
-use std::os;
+use std::net::{SocketAddr, ToSocketAddrs};
 use std::path::Path;
-use std::thread::{self, JoinGuard};
+use std::thread::{self, JoinHandle};
+
+use num_cpus;
 
 pub use self::request::Request;
 pub use self::response::Response;
@@ -13,9 +15,13 @@ pub use net::{Fresh, Streaming};
 
 use HttpError::HttpIoError;
 use {HttpResult};
-use header::Connection;
+use buffer::BufReader;
+use header::{Headers, Connection, Expect};
 use header::ConnectionOption::{Close, KeepAlive};
+use method::Method;
 use net::{NetworkListener, NetworkStream, HttpListener};
+use status::StatusCode;
+use uri::RequestUri;
 use version::HttpVersion::{Http10, Http11};
 
 use std::sync::{Arc, RwLock};
@@ -31,7 +37,9 @@ mod listener;
 ///
 /// Once listening, it will create a `Request`/`Response` pair for each
 /// incoming connection, and hand them to the provided handler.
+#[derive(Debug)]
 pub struct Server<'a, H: Handler<C>, C: ServerState, L = HttpListener> {
+
     handler: H,
     ssl: Option<(&'a Path, &'a Path)>,
     _marker: PhantomData<L>,
